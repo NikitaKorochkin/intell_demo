@@ -17,50 +17,29 @@ import javax.xml.stream.events.XMLEvent;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 
 public class XMLParserFromZipArchive {
     private static final String URL = "https://www.nalog.gov.ru/opendata/";
+    private static final int TOP_COMPANIES_COUNT = 5;
 
     public static void main(String[] args) {
-
-        long before1 = System.currentTimeMillis();
         String mainPage = connect(URL);
-        long after1 = System.currentTimeMillis();
-        System.out.println("Method 1 finished at " + (after1 - before1));
-        long before2 = System.currentTimeMillis();
         String zipLink = getZipArchiveLink(mainPage);
-        long after2 = System.currentTimeMillis();
-        System.out.println("Method 2 finished at " + (after2 - before2));
-        long before3 = System.currentTimeMillis();
-        List<String> xmls = getAllXMLs(zipLink);
-        long after3 = System.currentTimeMillis();
-        System.out.println("Method 3 finished at " + (after3 - before3));
-        long before4 = System.currentTimeMillis();
-        List<Company> companies = new ArrayList<>();
-        for (String xml: xmls)  {
-            companies.add(getCompany(xml));
-        }
-        long after4 = System.currentTimeMillis();
-        System.out.println("Method 4 finished at " + (after4 - before4));
-
-        companies.stream()
-                .sorted(Company::compareTo)
-                .limit(5)
-                .forEach(System.out::println);
+        SortedSet<Company> companySet = getAllCompaniesFromZipArchive(zipLink);
+        companySet.forEach(System.out::println);
     }
 
 
     private static String connect(String url) {
-        Document doc = null;
+        Document doc;
         String tmpUrl = null;
         try {
             doc = Jsoup.connect(URL).get();
-            System.out.println("Connected");
+            System.out.println("Connected to URL");
             Element table = doc.select("table").first();
             Elements tds = table.select("td");
             Element line = tds.get(86 * 4 - 3);
@@ -79,7 +58,7 @@ public class XMLParserFromZipArchive {
         String zipUrl = null;
         try {
             Document zipDocument = Jsoup.connect(url).get();
-            System.out.println("Connected");
+            System.out.println("Connected to zip URL");
             Element tableWithLink = zipDocument.selectFirst("table");
             Elements tdsZip = tableWithLink.select("td");
             Element tdZip = tdsZip.get(8 * 3 - 1);
@@ -92,71 +71,64 @@ public class XMLParserFromZipArchive {
         return zipUrl;
     }
 
-    private static List<String> getAllXMLs(String link) {
-        List<String> xmlFiles = new ArrayList<>();
-        try {
-            URL zip = new URL(link);
-            HttpURLConnection connection = (HttpURLConnection) zip.openConnection();
-            System.out.println("++++");
-            connection.setRequestMethod("GET");
-            InputStream inputStream = connection.getInputStream();
-            System.out.println("++++");
-            ZipInputStream zipIn = new ZipInputStream(inputStream);
-            ZipEntry entry = zipIn.getNextEntry();
-            BufferedReader xmlFileReader = new BufferedReader(new InputStreamReader(zipIn), 32786 * 2);
-
-
-            while (entry != null) {
-                xmlFiles.add(xmlFileReader.readLine());
-
-                zipIn.closeEntry();
-                entry = zipIn.getNextEntry();
-            }
-
-            zipIn.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        return xmlFiles;
-    }
-
-    private static Company getCompany(String xml)    {
+    private static SortedSet<Company> getAllCompaniesFromZipArchive(String link) {
         XMLInputFactory factory = XMLInputFactory.newInstance();
-        XMLEventReader reader = null;
-        Company company = null;
+        XMLEventReader reader;
+        SortedSet<Company> companies = new TreeSet<>();
+        Company company;
         String name = null;
         String inn = null;
         String count = null;
         try {
-            reader = factory.createXMLEventReader(new StringReader(xml));
-            while (reader.hasNext()) {
-                XMLEvent event = reader.nextEvent();
-                if (event.isStartElement()) {
-                    StartElement startElement = event.asStartElement();
-                    if (startElement.getName().getLocalPart().equals("СведНП")) {
-                        Attribute nameAttr = startElement.getAttributeByName(new QName("НаимОрг"));
-                        Attribute innAttr = startElement.getAttributeByName(new QName("ИННЮЛ"));
-                        name = nameAttr.getValue();
-                        inn = innAttr.getValue();
-                    }
-                    if (startElement.getName().getLocalPart().equals("СведССЧР")) {
-                        Attribute countAttr = startElement.getAttributeByName(new QName("КолРаб"));
-                        count = countAttr.getValue();
-                    }
-                }
-                if (event.isEndElement()) {
-                    EndElement endElement = event.asEndElement();
-                    if (endElement.getName().getLocalPart().equals("Документ")) {
-                        company = new Company(name, inn, count);
-                    }
-                }
-            }
-                    reader.close();
-            } catch (XMLStreamException e) {
-                e.printStackTrace();
-            }
+            URL zip = new URL(link);
+            HttpURLConnection connection = (HttpURLConnection) zip.openConnection();
+            connection.setRequestMethod("GET");
+            InputStream inputStream = connection.getInputStream();
+            ZipInputStream zipIn = new ZipInputStream(inputStream);
+            ZipEntry entry = zipIn.getNextEntry();
+            BufferedReader xmlFileReader = new BufferedReader(new InputStreamReader(zipIn));
 
-        return company;
+            while (entry != null) {
+                reader = factory.createXMLEventReader(new StringReader(xmlFileReader.readLine()));
+                while (reader.hasNext()) {
+                    XMLEvent event = reader.nextEvent();
+                    if (event.isStartElement()) {
+                        StartElement startElement = event.asStartElement();
+                        if (startElement.getName().getLocalPart().equals("СведНП")) {
+                            Attribute nameAttr = startElement.getAttributeByName(new QName("НаимОрг"));
+                            Attribute innAttr = startElement.getAttributeByName(new QName("ИННЮЛ"));
+                            name = nameAttr.getValue();
+                            inn = innAttr.getValue();
+                        }
+                        if (startElement.getName().getLocalPart().equals("СведССЧР")) {
+                            Attribute countAttr = startElement.getAttributeByName(new QName("КолРаб"));
+                            count = countAttr.getValue();
+                        }
+                    }
+                    if (event.isEndElement()) {
+                        EndElement endElement = event.asEndElement();
+                        if (endElement.getName().getLocalPart().equals("Документ")) {
+                            company = new Company(name, inn, count);
+                            companies.add(company);
+                            if (companies.size() > TOP_COMPANIES_COUNT) {
+                                companies.remove(companies.last());
+                            }
+                        }
+                    }
+                }
+                zipIn.closeEntry();
+                entry = zipIn.getNextEntry();
+            }
+            zipIn.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        } catch (XMLStreamException e) {
+            e.printStackTrace();
+            if (e.getMessage().contains("ParseError")) {
+                System.out.println("Check xml document structure");
+            }
+        }
+        return companies;
     }
 }
 
